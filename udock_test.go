@@ -20,19 +20,18 @@ const (
 
 func TestClient(t *testing.T) {
 	// Client creation and deferring closing client
-	client, err := CreateClient()
+	session, err := Create()
 	if errors.Is(err, ErrConnectingToDocker) {
 		t.Skip("docker not available, if you want these tests to run please make sure docker is running")
 	}
-
 	require.NoError(t, err)
-	require.NotNil(t, client)
+	require.NotNil(t, session)
 	defer func() {
-		require.NoError(t, client.Close())
+		require.NoError(t, session.Close())
 	}()
 
 	// Verify that we can identify that we don't have an image.
-	err = VerifyHaveImage(client, "some/madeup:image")
+	err = session.VerifyHaveImage("some/madeup:image")
 	require.ErrorIs(t, err, ErrImageNotPresent)
 
 	// Uncomment this if you want to test pulling image. Per default we don't test this
@@ -41,7 +40,7 @@ func TestClient(t *testing.T) {
 	// require.NoError(t, RemoveImage(client, testingImage))
 
 	// This will pull the image
-	err = PullImage(client, httpEchoImage)
+	err = session.PullImage(httpEchoImage)
 	require.NoError(t, err)
 
 	// allocate a random free port number for the external port
@@ -50,8 +49,7 @@ func TestClient(t *testing.T) {
 	httpExternalport := fmt.Sprintf("%d", freePort)
 
 	// create the container
-	containerID, err := CreateContainer(
-		client,
+	containerID, err := session.CreateContainer(
 		httpEchoImage,
 		fmt.Sprintf("test-%d", time.Now().UnixNano()),
 		map[string]string{httpExternalport: httpInternalPort},
@@ -60,12 +58,12 @@ func TestClient(t *testing.T) {
 	slog.Info("created container", "containerID", containerID)
 
 	defer func() {
-		require.NoError(t, RemoveContainer(client, containerID))
+		require.NoError(t, session.RemoveContainer(containerID))
 		slog.Info("removed container", "containerID", containerID)
 	}()
 
 	// start the container
-	err = StartContainer(client, containerID)
+	err = session.StartContainer(containerID)
 	require.NoError(t, err)
 	slog.Info("started container", "containerID", containerID)
 

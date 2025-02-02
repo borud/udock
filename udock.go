@@ -56,8 +56,11 @@ var (
 	ErrPortMap              = errors.New("portmap error")
 )
 
-// CreateClient creates a docker client.
-func CreateClient() (*client.Client, error) {
+type Session struct {
+	client *client.Client
+}
+
+func Create() (*Session, error) {
 	client, err := client.NewClientWithOpts(client.FromEnv, client.WithAPIVersionNegotiation())
 	if err != nil {
 		return nil, errors.Join(ErrCreatingDockerClient, err)
@@ -71,20 +74,22 @@ func CreateClient() (*client.Client, error) {
 		return nil, errors.Join(ErrConnectingToDocker, err)
 	}
 
-	return client, nil
+	return &Session{
+		client: client,
+	}, nil
 }
 
 // VerifyHaveImage returns a nil error if we have the image and an error if the
 // docker image is missing or an error occurred when probing if we have the
 // image.
-func VerifyHaveImage(client *client.Client, dockerImage string) error {
+func (s *Session) VerifyHaveImage(dockerImage string) error {
 	ctx, cancel := context.WithTimeout(context.Background(), dockerImageVerifyTimeout)
 	defer cancel()
 
 	filterArgs := filters.NewArgs()
 	filterArgs.Add("reference", dockerImage)
 
-	images, err := client.ImageList(ctx, image.ListOptions{Filters: filterArgs})
+	images, err := s.client.ImageList(ctx, image.ListOptions{Filters: filterArgs})
 	if err != nil {
 		return errors.Join(ErrListingImages, err)
 	}
@@ -98,8 +103,8 @@ func VerifyHaveImage(client *client.Client, dockerImage string) error {
 }
 
 // PullImage pulls a docker image.  Returns a nil error if ok and an error value if something went wrong.
-func PullImage(client *client.Client, dockerImage string) error {
-	err := VerifyHaveImage(client, dockerImage)
+func (s *Session) PullImage(dockerImage string) error {
+	err := s.VerifyHaveImage(dockerImage)
 	if err == nil {
 		slog.Info("already have image, not pulling", "dockerImage", dockerImage)
 		return nil
@@ -109,7 +114,7 @@ func PullImage(client *client.Client, dockerImage string) error {
 	defer cancel()
 
 	slog.Info("did not have image, pulling", "dockerImage", dockerImage)
-	image, err := client.ImagePull(ctx, dockerImage, image.PullOptions{All: false})
+	image, err := s.client.ImagePull(ctx, dockerImage, image.PullOptions{All: false})
 	if err != nil {
 		return errors.Join(fmt.Errorf("%w: %s", ErrPullingImage, dockerImage), err)
 	}
@@ -125,7 +130,7 @@ func PullImage(client *client.Client, dockerImage string) error {
 // CreateContainer creates a container.  If the operation succeeds we return a
 // containerID and error is nil.  If an error occurs, the container ID is empty
 // and the error is set.
-func CreateContainer(client *client.Client, dockerImage string, containerName string, ports map[string]string) (string, error) {
+func (s *Session) CreateContainer(dockerImage string, containerName string, ports map[string]string) (string, error) {
 	containerConfig := &container.Config{
 		Image: dockerImage,
 		Tty:   false,
@@ -152,7 +157,7 @@ func CreateContainer(client *client.Client, dockerImage string, containerName st
 	ctx, cancel := context.WithTimeout(context.Background(), dockerCreateContainerTimeout)
 	defer cancel()
 
-	container, err := client.ContainerCreate(
+	container, err := s.client.ContainerCreate(
 		ctx,
 		containerConfig,
 		containerHostConfig,
@@ -168,12 +173,12 @@ func CreateContainer(client *client.Client, dockerImage string, containerName st
 }
 
 // StartContainer starts a docker container that has already been created.
-func StartContainer(client *client.Client, containerID string) error {
+func (s *Session) StartContainer(containerID string) error {
 	ctx, cancel := context.WithTimeout(context.Background(), dockerStartContainerTimeout)
 	defer cancel()
 
 	// fire up the container
-	err := client.ContainerStart(ctx, containerID, container.StartOptions{})
+	err := s.client.ContainerStart(ctx, containerID, container.StartOptions{})
 	if err != nil {
 		return errors.Join(fmt.Errorf("%w: %s", ErrStartingContainer, containerID), err)
 	}
@@ -185,7 +190,7 @@ func StartContainer(client *client.Client, containerID string) error {
 	for {
 		select {
 		case <-ticker.C:
-			state, err := client.ContainerInspect(ctx, containerID)
+			state, err := s.client.ContainerInspect(ctx, containerID)
 			if err != nil {
 				return errors.Join(fmt.Errorf("%w: %s", ErrStartingContainer, containerID), err)
 			}
@@ -201,23 +206,28 @@ func StartContainer(client *client.Client, containerID string) error {
 
 // RemoveContainer removes a container and forces removal of volumes.  If the
 // container is running it is shut down first.
-func RemoveContainer(client *client.Client, containerID string) error {
+func (s *Session) RemoveContainer(containerID string) error {
 	ctx, cancel := context.WithTimeout(context.Background(), dockerRemoveContainerTimeout)
 	defer cancel()
 
-	return client.ContainerRemove(ctx, containerID, container.RemoveOptions{
+	return s.client.ContainerRemove(ctx, containerID, container.RemoveOptions{
 		RemoveVolumes: true,
 		Force:         true,
 	})
 }
 
 // RemoveImage removes a docker image.
-func RemoveImage(client *client.Client, dockerImage string) error {
+func (s *Session) RemoveImage(dockerImage string) error {
 	ctx, cancel := context.WithTimeout(context.Background(), dockerRemoveImageTimeout)
 	defer cancel()
 
-	_, err := client.ImageRemove(ctx, dockerImage, image.RemoveOptions{})
+	_, err := s.client.ImageRemove(ctx, dockerImage, image.RemoveOptions{})
 	return err
+}
+
+// Close session.
+func (s *Session) Close() error {
+	return s.client.Close()
 }
 
 func getFreePort() (int, error) {
