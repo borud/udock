@@ -102,7 +102,9 @@ func (s *Session) VerifyHaveImage(dockerImage string) error {
 	return fmt.Errorf("%w: %s", ErrImageNotPresent, dockerImage)
 }
 
-// PullImage pulls a docker image.  Returns a nil error if ok and an error value if something went wrong.
+// PullImage checks if we have an image and if we do not have the image pulls a
+// docker image.  Returns a nil error if ok and an error value if something
+// went wrong.
 func (s *Session) PullImage(dockerImage string) error {
 	err := s.VerifyHaveImage(dockerImage)
 	if err == nil {
